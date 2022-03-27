@@ -11,6 +11,36 @@ def textify(generator):
     return "\n".join(generator)
 
 
+@pytest.mark.parametrize("content_type", [
+    "application/x-www-form-urlencoded",
+    "multipart/form-data",
+])
+def test_render_request_body_url_form_encoded(testrenderer, oas_fragment, content_type):
+    markup = textify(
+        testrenderer.render_request_body(
+            oas_fragment(
+                f"""
+                content:
+                  {content_type}:
+                    schema:
+                      properties:
+                        foo:
+                          type: string
+                          description: Description
+                """,
+            ),
+            "/evidences/{evidenceId}",
+            "POST",
+        )
+    )
+    assert markup == textwrap.dedent(
+        """\
+        :formparameter foo: *(string)*
+           Description
+        """
+    )
+
+
 @pytest.mark.parametrize(
     "content_type", ["application/json", "application/foobar+json"]
 )

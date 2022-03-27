@@ -155,6 +155,12 @@ def _is_json_mimetype(mimetype):
     )
 
 
+def _is_form_data_mimetype(mimetype):
+    """Returns 'True' if a given mimetype is a url-encoded or form-data mime type"""
+
+    return mimetype in ("application/x-www-form-urlencoded", "multipart/form-data")
+
+
 def _is_2xx_status(status_code):
     """Returns 'True' if a given status code is one of successful."""
 
@@ -384,12 +390,18 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
 
         if self._json_schema_description:
             for content_type, content in request_body["content"].items():
-                if _is_json_mimetype(content_type) and content.get("schema"):
-                    yield from self.render_json_schema_description(
-                        content["schema"], "req"
-                    )
-                    yield ""
-                    break
+                if content.get("schema"):
+                    if _is_json_mimetype(content_type):
+                        yield from self.render_json_schema_description(
+                            content["schema"], "req"
+                        )
+                        yield ""
+                        break
+                    elif _is_form_data_mimetype(content_type):
+                        yield from self.render_json_schema_description(
+                            content["schema"], "form"
+                        )
+                        break
 
         yield from self.render_request_body_example(request_body, endpoint, method)
         yield ""
@@ -644,6 +656,10 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
                 "object": ("resjson", "resjsonobj"),
                 "array": ("resjsonarr", "resjsonarrtype"),
             },
+            "form": {
+                "object": ("formparameter", "__inline__"),
+                "array": ("formparameter", "__inline__"),
+            }
         }
 
         # These httpdomain's fields always expect either JSON Object or JSON
@@ -662,19 +678,22 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
                 return
 
         for name, schema, is_required in _traverse_schema(schema, ""):
-            yield f":{directive} {name}:"
-
-            if schema.get("description"):
-                yield from indented(
-                    self._convert_markup(schema["description"]).strip().splitlines()
-                )
-
             markers = _get_markers_from_object({}, schema)
 
             if is_required:
                 markers.append("required")
 
-            if markers:
+            directive_rst = f":{directive} {name}:"
+            if typedirective == "__inline__" and markers:
+                directive_rst += f" *(" + ", ".join(markers) + ")*"
+
+            yield directive_rst
+            if schema.get("description"):
+                yield from indented(
+                    self._convert_markup(schema["description"]).strip().splitlines()
+                )
+
+            if typedirective != "__inline__" and markers:
                 markers = ", ".join(markers)
                 yield f":{typedirective} {name}: {markers}"
 
