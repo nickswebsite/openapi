@@ -1386,18 +1386,22 @@ def test_render_json_schema_description_enum_wo_type(
 def test_render_json_schema_description_with_references(
         testrenderer, oas_fragment, schema_type, req_or_res, directive, typedirective
 ):
+    schema = oas_fragment(
+        f"""
+        definitions:
+          Foo:
+            type: "{schema_type}"
+        """
+    )
     fragment = oas_fragment(
-                f"""
-                type: object
-                properties:
-                  some_key:
-                    $ref: "#/definitions/Foo"
-                definitions:
-                  Foo:
-                    type: "{schema_type}"
-                """
-            )
-    with testrenderer.override_schema(fragment):
+        f"""
+        type: object
+        properties:
+          some_key:
+            $ref: "#/definitions/Foo"
+        """
+    )
+    with testrenderer.override_schema(schema):
         markup = textify(
             testrenderer.render_json_schema_description(
                 fragment,

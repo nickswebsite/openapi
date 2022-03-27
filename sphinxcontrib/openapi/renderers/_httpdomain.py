@@ -585,6 +585,12 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
 
         schema = _resolve_combining_schema(schema)
         schema_type = _get_schema_type(schema)
+        if schema_type is None and "$ref" in schema:
+            yield from self.render_json_schema_description(
+                self.resolve_reference(schema["$ref"]),
+                req_or_res,
+            )
+            return
 
         # On root level, httpdomain supports only 'object' and 'array' response
         # types. If it's something else, let's do not even try to render it.
