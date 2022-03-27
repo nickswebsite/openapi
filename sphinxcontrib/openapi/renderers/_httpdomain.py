@@ -6,6 +6,7 @@ import copy
 import functools
 import http.client
 import json
+import re
 
 import deepmerge
 import docutils.parsers.rst.directives as directives
@@ -204,12 +205,17 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
         "response-example-preference": None,
         "generate-examples-from-schemas": directives.flag,
         "no-json-schema-description": directives.flag,
+        "include": lambda s: s.split(),
+        "exclude": lambda s: s.split(),
     }
 
     def __init__(self, state, options):
         super().__init__(state, options)
 
         self._rendering_schema = None
+
+        self._include = options.get("include")
+        self._exclude = options.get("exclude")
 
         self._convert_markup = self._markup_converters[
             options.get("markup", "commonmark")
@@ -242,9 +248,37 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
         if spec.get("swagger") == "2.0":
             spec = lib2to3.convert(spec)
 
+        spec_paths = spec.get("paths", {})
+        paths = self.filter_paths(spec_paths.keys())
+
         self._rendering_schema = spec
-        yield from self.render_paths(spec.get("paths", {}))
+        yield from self.render_paths({
+            k: spec_paths[k] for k in paths
+        })
         self._rendering_schema = None
+
+    def filter_paths(self, iterable):
+        path_keys = []
+
+        excludes = []
+        includes = []
+
+        if self._exclude:
+            for regex in self._exclude:
+                excludes.append(re.compile(regex))
+
+        if self._include:
+            for regex in self._include:
+                includes.append(re.compile(regex))
+        else:
+            includes = [re.compile(".+")]
+
+        for path in iterable:
+            if any(r.match(path) for r in includes) and not any(r.match(path) for r in excludes):
+                if path not in path_keys:
+                    path_keys.append(path)
+
+        return list(path_keys)
 
     def render_paths(self, paths):
         """Render OAS paths item."""
