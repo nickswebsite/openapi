@@ -1,6 +1,7 @@
 """OpenAPI spec renderer."""
 
 import collections
+import contextlib
 import copy
 import functools
 import http.client
@@ -9,6 +10,7 @@ import json
 import deepmerge
 import docutils.parsers.rst.directives as directives
 import m2r
+from jsonpointer import resolve_pointer
 import requests
 import sphinx.util.logging as logging
 
@@ -16,6 +18,11 @@ from sphinxcontrib.openapi import _lib2to3 as lib2to3
 from sphinxcontrib.openapi.renderers import abc
 from sphinxcontrib.openapi.schema_utils import example_from_schema
 
+# collections.Mapping has been moved to `collections.abc.Mapping` in python 3.10
+try:
+    Mapping = collections.abc.Mapping
+except AttributeError:
+    Mapping = collections.Mapping
 
 CaseInsensitiveDict = requests.structures.CaseInsensitiveDict
 
@@ -174,7 +181,7 @@ def _get_schema_type(schema):
 
 
 _merge_mappings = deepmerge.Merger(
-    [(collections.Mapping, deepmerge.strategy.dict.DictStrategies("merge"))],
+    [(Mapping, deepmerge.strategy.dict.DictStrategies("merge"))],
     ["override"],
     ["override"],
 ).merge
@@ -201,6 +208,8 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
 
     def __init__(self, state, options):
         super().__init__(state, options)
+
+        self._rendering_schema = None
 
         self._convert_markup = self._markup_converters[
             options.get("markup", "commonmark")
@@ -232,7 +241,10 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
 
         if spec.get("swagger") == "2.0":
             spec = lib2to3.convert(spec)
+
+        self._rendering_schema = spec
         yield from self.render_paths(spec.get("paths", {}))
+        self._rendering_schema = None
 
     def render_paths(self, paths):
         """Render OAS paths item."""
@@ -526,7 +538,14 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
         def _traverse_schema(schema, name, is_required=False):
             schema_type = _get_schema_type(schema)
 
-            if {"oneOf", "anyOf", "allOf"} & schema.keys():
+            if "$ref" in schema:
+                yield from _traverse_schema(
+                    self.resolve_reference(schema["$ref"]),
+                    name,
+                    is_required,
+                )
+
+            elif {"oneOf", "anyOf", "allOf"} & schema.keys():
                 # Since an item can represented by either or any schema from
                 # the array of schema in case of `oneOf` and `anyOf`
                 # respectively, the best we can do for them is to render the
@@ -618,3 +637,18 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
             if markers:
                 markers = ", ".join(markers)
                 yield f":{typedirective} {name}: {markers}"
+
+    def resolve_reference(self, link):
+        if link.startswith("#"):
+            return resolve_pointer(self._rendering_schema, link[1:])
+        else:
+            raise NotImplementedError("Resolving references to URIs is not currently supported.")
+
+    @contextlib.contextmanager
+    def override_schema(self, schema):
+        old = self._rendering_schema
+        try:
+            self._rendering_schema = schema
+            yield
+        finally:
+            self._rendering_schema = old

@@ -1364,3 +1364,49 @@ def test_render_json_schema_description_enum_wo_type(
         :{typedirective} root: enum
         """.rstrip()
     )
+
+
+@pytest.mark.parametrize(
+    ["req_or_res", "directive", "typedirective"],
+    [
+        pytest.param("req", "reqjson", "reqjsonobj", id="req"),
+        pytest.param("res", "resjson", "resjsonobj", id="res"),
+    ],
+)
+@pytest.mark.parametrize(
+    ["schema_type"],
+    [
+        pytest.param("null"),
+        pytest.param("boolean"),
+        pytest.param("number"),
+        pytest.param("string"),
+        pytest.param("integer"),
+    ],
+)
+def test_render_json_schema_description_with_references(
+        testrenderer, oas_fragment, schema_type, req_or_res, directive, typedirective
+):
+    fragment = oas_fragment(
+                f"""
+                type: object
+                properties:
+                  some_key:
+                    $ref: "#/definitions/Foo"
+                definitions:
+                  Foo:
+                    type: "{schema_type}"
+                """
+            )
+    with testrenderer.override_schema(fragment):
+        markup = textify(
+            testrenderer.render_json_schema_description(
+                fragment,
+                req_or_res
+            )
+        )
+    assert markup == textwrap.dedent(
+        f"""\
+        :{directive} some_key:
+        :{typedirective} some_key: {schema_type}
+        """
+    ).rstrip()
