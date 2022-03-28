@@ -30,6 +30,7 @@ setup(
         "sphinxcontrib-httpdomain >= 1.5.0",
         "PyYAML >= 3.12",
         "jsonschema >= 2.5.1",
+        "jsonpointer >= 2.2",
         "m2r >= 0.2",
         "mistune <= 0.8.4",
         "picobox >= 2.2",
