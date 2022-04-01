@@ -8,6 +8,7 @@ import http.client
 import json
 import re
 
+import deepmerge
 import docutils.parsers.rst.directives as directives
 import m2r
 from jsonpointer import resolve_pointer
@@ -16,8 +17,13 @@ import sphinx.util.logging as logging
 
 from sphinxcontrib.openapi import _lib2to3 as lib2to3
 from sphinxcontrib.openapi.renderers import abc
-from sphinxcontrib.openapi.schema_utils import example_from_schema, resolve_combining_schema, resolve_reference, \
-    traverse_schema, rebuild_references
+from sphinxcontrib.openapi.schema_utils import example_from_schema
+
+# collections.Mapping has been moved to `collections.abc.Mapping` in python 3.10
+try:
+    Mapping = collections.abc.Mapping
+except AttributeError:
+    Mapping = collections.Mapping
 
 CaseInsensitiveDict = requests.structures.CaseInsensitiveDict
 
@@ -179,6 +185,13 @@ def _get_schema_type(schema):
     else:
         schema_type = schema["type"]
     return schema_type
+
+
+_merge_mappings = deepmerge.Merger(
+    [(Mapping, deepmerge.strategy.dict.DictStrategies("merge"))],
+    ["override"],
+    ["override"],
+).merge
 
 
 class HttpdomainRenderer(abc.RestructuredTextRenderer):
@@ -398,7 +411,7 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
 
         content_type, example = next(
             _iterexamples(
-                self.resolve_content_references(request_body["content"]),
+                request_body["content"],
                 self._request_example_preference,
                 self._generate_example_from_schema,
             ),
@@ -439,17 +452,6 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
             # guessing going on, let's ensure it's always string at this point.
             yield from self.render_response(str(status_code), response)
 
-    def resolve_content_references(self, content):
-        content = content.copy()
-        for content_type in content:
-            if _is_json_mimetype(content_type):
-                if "schema" in content[content_type]:
-                    schema = content[content_type]["schema"]
-                    if "$ref" in schema:
-                        content[content_type]["schema"] = rebuild_references(self._rendering_schema, schema)
-
-        return content
-
     def render_response(self, status_code, response):
         """Render OAS operation's response."""
 
@@ -461,10 +463,7 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
         if "content" in response and status_code in self._response_examples_for:
             yield ""
             yield from indented(
-                self.render_response_example(
-                    self.resolve_content_references(response["content"]),
-                    status_code,
-                )
+                self.render_response_example(response["content"], status_code)
             )
 
         if "headers" in response:
@@ -548,11 +547,93 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
     def render_json_schema_description(self, schema, req_or_res):
         """Render JSON schema's description."""
 
-        schema = resolve_combining_schema(schema)
+        def _resolve_combining_schema(schema):
+            if "oneOf" in schema:
+                # The part with merging is a vague one since I only found a
+                # single 'oneOf' example where such merging was assumed, and no
+                # explanations in the spec itself.
+                merged_schema = schema.copy()
+                merged_schema.update(merged_schema.pop("oneOf")[0])
+                return merged_schema
+
+            elif "anyOf" in schema:
+                # The part with merging is a vague one since I only found a
+                # single 'oneOf' example where such merging was assumed, and no
+                # explanations in the spec itself.
+                merged_schema = schema.copy()
+                merged_schema.update(merged_schema.pop("anyOf")[0])
+                return merged_schema
+
+            elif "allOf" in schema:
+                # Since the item is represented by all schemas from the array,
+                # the best we can do is to render them all at once
+                # sequentially. Please note, the only way the end result will
+                # ever make sense is when all schemas from the array are of
+                # object type.
+                merged_schema = schema.copy()
+                for item in merged_schema.pop("allOf"):
+                    merged_schema = _merge_mappings(merged_schema, copy.deepcopy(item))
+                return merged_schema
+
+            elif "not" in schema:
+                # Eh.. do nothing because I have no idea what can we do.
+                return {}
+
+            return schema
+
+        def _traverse_schema(schema, name, is_required=False):
+            schema_type = _get_schema_type(schema)
+
+            if "$ref" in schema:
+                yield from _traverse_schema(
+                    self.resolve_reference(schema["$ref"]),
+                    name,
+                    is_required,
+                )
+
+            elif {"oneOf", "anyOf", "allOf"} & schema.keys():
+                # Since an item can represented by either or any schema from
+                # the array of schema in case of `oneOf` and `anyOf`
+                # respectively, the best we can do for them is to render the
+                # first found variant. In other words, we are going to traverse
+                # only a single schema variant and leave the rest out. This is
+                # by design and it was decided so in order to keep produced
+                # description clear and simple.
+                yield from _traverse_schema(_resolve_combining_schema(schema), name)
+
+            elif "not" in schema:
+                yield name, {}, is_required
+
+            elif schema_type == "object":
+                if name:
+                    yield name, schema, is_required
+
+                required = set(schema.get("required", []))
+
+                for key, value in schema.get("properties", {}).items():
+                    # In case of the first recursion call, when 'name' is an
+                    # empty string, we should go with 'key' only in order to
+                    # avoid leading dot at the beginning.
+                    yield from _traverse_schema(
+                        value,
+                        f"{name}.{key}" if name else key,
+                        is_required=key in required,
+                    )
+
+            elif schema_type == "array":
+                yield from _traverse_schema(schema["items"], f"{name}[]")
+
+            elif "enum" in schema:
+                yield name, schema, is_required
+
+            elif schema_type is not None:
+                yield name, schema, is_required
+
+        schema = _resolve_combining_schema(schema)
         schema_type = _get_schema_type(schema)
         if schema_type is None and "$ref" in schema:
             yield from self.render_json_schema_description(
-                resolve_reference(self._rendering_schema, schema["$ref"]),
+                self.resolve_reference(schema["$ref"]),
                 req_or_res,
             )
             return
@@ -596,7 +677,7 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
             if _get_schema_type(schema) not in {"object", "array"}:
                 return
 
-        for name, schema, is_required in traverse_schema(self._rendering_schema, schema, ""):
+        for name, schema, is_required in _traverse_schema(schema, ""):
             markers = _get_markers_from_object({}, schema)
 
             if is_required:
@@ -615,6 +696,12 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
             if typedirective != "__inline__" and markers:
                 markers = ", ".join(markers)
                 yield f":{typedirective} {name}: {markers}"
+
+    def resolve_reference(self, link):
+        if link.startswith("#"):
+            return resolve_pointer(self._rendering_schema, link[1:])
+        else:
+            raise NotImplementedError("Resolving references to URIs is not currently supported.")
 
     @contextlib.contextmanager
     def override_schema(self, schema):
