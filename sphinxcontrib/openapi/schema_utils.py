@@ -270,13 +270,13 @@ def rebuild_references(top_level, block):
             **block,
             "items": rebuild_references(top_level, block["items"])
         }
+    elif {"oneOf", "anyOf", "allOf"} & block.keys():
+        return rebuild_references(
+            top_level, resolve_combining_schema(block),
+        )
     elif "$ref" in block:
         return rebuild_references(
             top_level, resolve_reference(top_level, block["$ref"])
-        )
-    elif {"oneOf", "anyOf", "allOf"} & block.keys():
-        return rebuild_references(
-            top_level, resolve_combining_schema(block)
         )
     else:
         return block
