@@ -212,6 +212,31 @@ def test_render_request_body_example(testrenderer, content, oas_fragment):
                  ]
                }
             """.rstrip()
+        ),
+        pytest.param(
+            {
+                "properties": {
+                    "foo": {
+                        "allOf": [
+                            {
+                                "$ref": "#/definitions/Bar"
+                            }
+                        ]
+                    }
+                }
+            },
+            """\
+            .. sourcecode:: http
+            
+               POST /evidences/{evidenceId} HTTP/1.1
+               Content-Type: application/json
+               
+               {
+                 "foo": {
+                   "bar": 42
+                 }
+               }
+            """.rstrip()
         )
     ]
 )
