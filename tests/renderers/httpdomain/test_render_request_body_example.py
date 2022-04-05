@@ -237,6 +237,61 @@ def test_render_request_body_example(testrenderer, content, oas_fragment):
                  }
                }
             """.rstrip()
+        ),
+        pytest.param(
+            {
+                "items": {
+                    "$ref": "#/definitions/Bar"
+                }
+            },
+            """\
+            .. sourcecode:: http
+            
+               POST /evidences/{evidenceId} HTTP/1.1
+               Content-Type: application/json
+            
+               [
+                 {
+                   "bar": 42
+                 },
+                 {
+                   "bar": 42
+                 }
+               ]
+            """.rstrip()
+        ),
+        pytest.param(
+            {
+                "items": {
+                    "properties": {
+                        "foo": {
+                            "anyOf": [
+                                {
+                                    "type": "boolean"
+                                },
+                                {
+                                    "$ref": "#/definitions/Bar"
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            """\
+            .. sourcecode:: http
+               
+               POST /evidences/{evidenceId} HTTP/1.1
+               Content-Type: application/json
+
+               [
+                 {
+                   "foo": true
+                 },
+                 {
+                   "foo": true
+                 }
+               ]
+            """.rstrip()
         )
     ]
 )
@@ -278,6 +333,39 @@ def test_renders_example_request_body_recursive_references(
         )
 
     assert markup == textwrap.dedent(expected)
+
+
+def test_renders_request_body_with_augmented_mime_types(testrenderer, oas_fragment):
+    """Renders request body with augmented mime types"""
+    testrenderer._generate_example_from_schema = True
+    markup = textify(
+        testrenderer.render_request_body_example(
+            oas_fragment(
+                """
+                content:
+                  application/json-patch+json:
+                    schema:
+                      properties:
+                        foo:
+                          type: string
+                          example: Foo Value
+                """
+            ),
+            "/endpoint",
+            "POST"
+        )
+    )
+
+    assert markup == textwrap.dedent("""\
+        .. sourcecode:: http
+
+           POST /endpoint HTTP/1.1
+           Content-Type: application/json-patch+json
+
+           {
+             "foo": "Foo Value"
+           }
+    """.rstrip())
 
 
 def test_render_request_body_example_1st_from_examples(testrenderer, oas_fragment):

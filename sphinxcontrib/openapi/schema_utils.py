@@ -265,6 +265,8 @@ def rebuild_references(top_level, block):
             for k, v in block["properties"].items():
                 properties[k] = rebuild_references(top_level, v)
             return {**block, "properties": properties}
+        else:
+            return block
     elif schema_type == "array":
         return {
             **block,

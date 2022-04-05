@@ -10,7 +10,6 @@ import re
 
 import docutils.parsers.rst.directives as directives
 import m2r
-from jsonpointer import resolve_pointer
 import requests
 import sphinx.util.logging as logging
 
@@ -440,13 +439,12 @@ class HttpdomainRenderer(abc.RestructuredTextRenderer):
             yield from self.render_response(str(status_code), response)
 
     def resolve_content_references(self, content):
-        content = content.copy()
+        content = copy.deepcopy(content)
         for content_type in content:
             if _is_json_mimetype(content_type):
                 if "schema" in content[content_type]:
                     schema = content[content_type]["schema"]
-                    if "$ref" in schema:
-                        content[content_type]["schema"] = rebuild_references(self._rendering_schema, schema)
+                    content[content_type]["schema"] = rebuild_references(self._rendering_schema, schema)
 
         return content
 
